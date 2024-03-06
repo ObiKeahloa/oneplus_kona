@@ -33,7 +33,6 @@
 
 #ifdef OPLUS_BUG_STABILITY
 #define PP_TIMEOUT_BAD_TRIALS   10
-#include <soc/oplus/system/oplus_mm_kevent_fb.h>
 extern int oplus_dimlayer_fingerprint_failcount;
 #endif
 
@@ -232,18 +231,6 @@ static void sde_encoder_phys_cmd_pp_tx_done_irq(void *arg, int irq_idx)
 	SDE_ATRACE_END("pp_done_irq");
 }
 
-ktime_t sde_encoder_get_last_vsync_ts_cmd(struct sde_encoder_phys *phys_enc)
-{
-	struct sde_encoder_phys_cmd *cmd_enc =
-			to_sde_encoder_phys_cmd(phys_enc);
-	struct sde_encoder_phys_cmd_te_timestamp *te_timestamp;
-
-	te_timestamp = list_last_entry(&cmd_enc->te_timestamp_list,
-			struct sde_encoder_phys_cmd_te_timestamp, list);
-
-	return te_timestamp->timestamp;
-}
-
 static void sde_encoder_phys_cmd_autorefresh_done_irq(void *arg, int irq_idx)
 {
 	struct sde_encoder_phys *phys_enc = arg;
@@ -317,8 +304,7 @@ static void sde_encoder_phys_cmd_te_rd_ptr_irq(void *arg, int irq_idx)
 		info[0].wr_ptr_line_count, info[0].intf_frame_count,
 		info[1].pp_idx, info[1].intf_idx,
 		info[1].wr_ptr_line_count, info[1].intf_frame_count,
-		scheduler_status, te_timestamp? (te_timestamp->timestamp) >> 32: 0,
-		te_timestamp? (te_timestamp->timestamp) & 0xffffffff :0);
+		scheduler_status);
 
 	if (phys_enc->parent_ops.handle_vblank_virt)
 		phys_enc->parent_ops.handle_vblank_virt(phys_enc->parent,
@@ -616,18 +602,13 @@ static int _sde_encoder_phys_cmd_handle_ppdone_timeout(
 				phys_enc->hw_pp->idx - PINGPONG_0,
 				phys_enc->hw_ctl->idx - CTL_0,
 				pending_kickoff_cnt);
-#ifdef OPLUS_BUG_STABILITY
-		mm_fb_display_kevent("DisplayDriverID@@409$$", MM_FB_KEY_RATELIMIT_NONE, "ppdone timeout failed pp:%d kickoff timeout", phys_enc->hw_pp->idx - PINGPONG_0);
-#endif /* OPLUS_BUG_STABILITY */
 		SDE_EVT32(DRMID(phys_enc->parent), SDE_EVTLOG_FATAL);
-		mutex_lock(phys_enc->vblank_ctl_lock);
 		sde_encoder_helper_unregister_irq(phys_enc, INTR_IDX_RDPTR);
 		if (sde_kms_is_secure_session_inprogress(phys_enc->sde_kms))
 			SDE_DBG_DUMP("secure", "all", "dbg_bus");
 		else
 			SDE_DBG_DUMP("all", "dbg_bus", "vbif_dbg_bus");
 		sde_encoder_helper_register_irq(phys_enc, INTR_IDX_RDPTR);
-		mutex_unlock(phys_enc->vblank_ctl_lock);
 	}
 
 	/*
@@ -707,9 +688,9 @@ static int _sde_encoder_phys_cmd_poll_write_pointer_started(
 	}
 
 	if (phys_enc->has_intf_te)
-		ret = hw_intf->ops.get_vsync_info(hw_intf, &info, false);
+		ret = hw_intf->ops.get_vsync_info(hw_intf, &info);
 	else
-		ret = hw_pp->ops.get_vsync_info(hw_pp, &info, false);
+		ret = hw_pp->ops.get_vsync_info(hw_pp, &info);
 
 	if (ret)
 		return ret;
@@ -758,13 +739,13 @@ static bool _sde_encoder_phys_cmd_is_ongoing_pptx(
 		if (!hw_intf || !hw_intf->ops.get_vsync_info)
 			return false;
 
-		hw_intf->ops.get_vsync_info(hw_intf, &info, true);
+		hw_intf->ops.get_vsync_info(hw_intf, &info);
 	} else {
 		hw_pp = phys_enc->hw_pp;
 		if (!hw_pp || !hw_pp->ops.get_vsync_info)
 			return false;
 
-		hw_pp->ops.get_vsync_info(hw_pp, &info, true);
+		hw_pp->ops.get_vsync_info(hw_pp, &info);
 	}
 
 	SDE_EVT32(DRMID(phys_enc->parent),
@@ -1322,20 +1303,12 @@ static void sde_encoder_phys_cmd_enable(struct sde_encoder_phys *phys_enc)
 static bool sde_encoder_phys_cmd_is_autorefresh_enabled(
 		struct sde_encoder_phys *phys_enc)
 {
-	struct sde_encoder_phys_cmd *cmd_enc;
 	struct sde_hw_pingpong *hw_pp;
 	struct sde_hw_intf *hw_intf;
 	struct sde_hw_autorefresh cfg;
 	int ret;
 
-	if (!phys_enc)
-		return false;
-
-	cmd_enc = to_sde_encoder_phys_cmd(phys_enc);
-	if (!cmd_enc->autorefresh.cfg.enable)
-		return false;
-
-	if (!phys_enc->hw_pp || !phys_enc->hw_intf)
+	if (!phys_enc || !phys_enc->hw_pp || !phys_enc->hw_intf)
 		return false;
 
 	if (!sde_encoder_phys_cmd_is_master(phys_enc))
@@ -1428,14 +1401,14 @@ static int sde_encoder_phys_cmd_get_write_line_count(
 		if (!hw_intf->ops.get_vsync_info)
 			return -EINVAL;
 
-		if (hw_intf->ops.get_vsync_info(hw_intf, &info, true))
+		if (hw_intf->ops.get_vsync_info(hw_intf, &info))
 			return -EINVAL;
 	} else {
 		hw_pp = phys_enc->hw_pp;
 		if (!hw_pp->ops.get_vsync_info)
 			return -EINVAL;
 
-		if (hw_pp->ops.get_vsync_info(hw_pp, &info, true))
+		if (hw_pp->ops.get_vsync_info(hw_pp, &info))
 			return -EINVAL;
 	}
 
@@ -1781,9 +1754,6 @@ static int _sde_encoder_phys_cmd_handle_wr_ptr_timeout(
 		SDE_ERROR_CMDENC(cmd_enc,
 			"wr_ptr_irq wait failed, switch_te:%d\n", switch_te);
 		SDE_EVT32(DRMID(phys_enc->parent), switch_te, SDE_EVTLOG_ERROR);
-#ifdef OPLUS_BUG_STABILITY
-		mm_fb_display_kevent("DisplayDriverID@@418$$", MM_FB_KEY_RATELIMIT_30MIN, "wr_ptr_irq timeout failed switch_te:%d", switch_te);
-#endif
 
 		if (sde_encoder_phys_cmd_is_master(phys_enc) &&
 			atomic_add_unless(

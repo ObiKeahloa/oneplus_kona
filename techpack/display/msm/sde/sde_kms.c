@@ -944,7 +944,7 @@ static void _sde_kms_drm_check_dpms(struct drm_atomic_state *old_state,
 			old_mode = DRM_PANEL_BLANK_POWERDOWN;
 		}
 
-		if (old_mode != new_mode) {
+		if ((old_mode != new_mode) || (old_fps != new_fps)) {
 			struct drm_panel_notifier notifier_data;
 
 			SDE_EVT32(old_mode, new_mode, old_fps, new_fps,
@@ -1118,7 +1118,6 @@ static void _sde_kms_release_splash_resource(struct sde_kms *sde_kms,
 				sde_power_data_bus_set_quota(&priv->phandle, i,
 					SDE_POWER_HANDLE_ENABLE_BUS_AB_QUOTA,
 					SDE_POWER_HANDLE_ENABLE_BUS_IB_QUOTA);
-
 		pm_runtime_put_sync(sde_kms->dev->dev);
 	}
 }

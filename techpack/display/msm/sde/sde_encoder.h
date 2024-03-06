@@ -378,6 +378,7 @@ void sde_encoder_rc_unlock(struct drm_encoder *drm_enc);
 void sde_encoder_disable_autorefresh_handler(struct drm_encoder *drm_enc);
 bool sde_encoder_is_disabled(struct drm_encoder *drm_enc);
 #endif
+
 /**
  * sde_encoder_virt_reset - delay encoder virt reset
  * @drm_enc:	Pointer to drm encoder structure

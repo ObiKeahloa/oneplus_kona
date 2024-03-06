@@ -315,7 +315,6 @@ struct sde_encoder_virt {
 	struct kthread_work input_event_work;
 	struct kthread_work esd_trigger_work;
 	struct input_handler *input_handler;
-	bool input_handler_registered;
 #if defined(OPLUS_FEATURE_PXLW_IRIS5)
 	struct kthread_work disable_autorefresh_work;
 #endif
@@ -806,7 +805,6 @@ void sde_encoder_destroy(struct drm_encoder *drm_enc)
 
 	kfree(sde_enc->input_handler);
 	sde_enc->input_handler = NULL;
-	sde_enc->input_handler_registered = false;
 
 	kfree(sde_enc);
 }
@@ -2026,31 +2024,6 @@ static int _sde_encoder_rsc_client_update_vsync_wait(
 	return ret;
 }
 
-static void sde_encoder_wait_for_event_wakeup(struct drm_encoder *drm_enc, int curr_fps)
-{
-	struct sde_encoder_virt *sde_enc;
-	u64 frame_time_ns = 0;
-	ktime_t next_vsync_timestamp, prev_vsync_timestamp;
-
-	sde_enc = to_sde_encoder_virt(drm_enc);
-	if (!sde_enc->cur_master || !curr_fps) {
-		pr_info("invalid args %d %d\n", curr_fps, sde_enc->cur_master);
-		SDE_EVT32(0x1111);
-		return;
-	}
-
-	frame_time_ns =  div_u64(1000000000, curr_fps);
-	prev_vsync_timestamp = sde_encoder_get_last_vsync_ts_cmd(sde_enc->cur_master);
-	prev_vsync_timestamp = ktime_to_ns(prev_vsync_timestamp);
-	next_vsync_timestamp = ktime_add_ns(prev_vsync_timestamp, frame_time_ns);
-	if (ktime_after(next_vsync_timestamp, ktime_get_ns()) &&
-		ktime_sub_ns(next_vsync_timestamp, ktime_get_ns()) < 2000000) {
-		SDE_EVT32(0x1111, prev_vsync_timestamp? prev_vsync_timestamp >> 32 :0,
-			prev_vsync_timestamp? prev_vsync_timestamp & 0xffffffff : 0);
-		msleep(4);
-	}
-}
-
 static int _sde_encoder_update_rsc_client(
 		struct drm_encoder *drm_enc, bool enable)
 {
@@ -2146,12 +2119,6 @@ static int _sde_encoder_update_rsc_client(
 	    (rsc_config->prefill_lines != mode_info->prefill_lines) ||
 	    (rsc_config->jitter_numer != mode_info->jitter_numer) ||
 	    (rsc_config->jitter_denom != mode_info->jitter_denom)) {
-
-		if ((rsc_config->fps != mode_info->frame_rate) &&
-			sde_encoder_check_curr_mode(&sde_enc->base,
-				MSM_DISPLAY_CMD_MODE)) {
-			sde_encoder_wait_for_event_wakeup(drm_enc, rsc_config->fps);
-		}
 
 		rsc_config->fps = mode_info->frame_rate;
 		rsc_config->vtotal = mode_info->vtotal;
@@ -2449,6 +2416,8 @@ static int _sde_encoder_rc_kickoff(struct drm_encoder *drm_enc,
 	/* cancel delayed off work, if any */
 	_sde_encoder_rc_cancel_delayed(sde_enc, sw_event);
 
+	msm_idle_set_state(drm_enc, true);
+
 	mutex_lock(&sde_enc->rc_lock);
 
 	/* return if the resource control is already in ON state */
@@ -2557,6 +2526,8 @@ static int _sde_encoder_rc_frame_done(struct drm_encoder *drm_enc,
 		idle_pc_duration = IDLE_SHORT_TIMEOUT;
 	else
 		idle_pc_duration = IDLE_POWERCOLLAPSE_DURATION;
+
+	msm_idle_set_state(drm_enc, false);
 
 	if (!autorefresh_enabled)
 		kthread_mod_delayed_work(
@@ -3320,7 +3291,6 @@ static void _sde_encoder_input_handler_register(
 	}
 }
 
-#if 0
 static void _sde_encoder_input_handler_unregister(
 		struct drm_encoder *drm_enc)
 {
@@ -3335,7 +3305,6 @@ static void _sde_encoder_input_handler_unregister(
 	}
 
 }
-#endif
 
 static int _sde_encoder_input_handler(
 		struct sde_encoder_virt *sde_enc)
@@ -3360,7 +3329,6 @@ static int _sde_encoder_input_handler(
 	input_handler->id_table = sde_input_ids;
 
 	sde_enc->input_handler = input_handler;
-	sde_enc->input_handler_registered = false;
 
 	return rc;
 }
@@ -3517,18 +3485,7 @@ static void sde_encoder_virt_enable(struct drm_encoder *drm_enc)
 		return;
 	}
 
-	/* register input handler if not already registered */
-	if (sde_enc->input_handler && !sde_enc->input_handler_registered &&
-			!msm_is_mode_seamless_dms(cur_mode) &&
-		sde_encoder_check_curr_mode(drm_enc, MSM_DISPLAY_CMD_MODE) &&
-			!msm_is_mode_seamless_dyn_clk(cur_mode)) {
-		_sde_encoder_input_handler_register(drm_enc);
-		if (!sde_enc->input_handler || !sde_enc->input_handler->private)
-			SDE_ERROR(
-			"input handler registration failed, rc = %d\n", ret);
-		else
-			sde_enc->input_handler_registered = true;
-	}
+	_sde_encoder_input_handler_register(drm_enc);
 
 	if ((drm_enc->crtc && drm_enc->crtc->state &&
 			drm_enc->crtc->state->connectors_changed &&
@@ -3659,11 +3616,7 @@ static void sde_encoder_virt_disable(struct drm_encoder *drm_enc)
 	if (!sde_encoder_in_clone_mode(drm_enc))
 		sde_encoder_wait_for_event(drm_enc, MSM_ENC_TX_COMPLETE);
 
-	if (sde_enc->input_handler && sde_enc->input_handler_registered &&
-		sde_encoder_check_curr_mode(drm_enc, MSM_DISPLAY_CMD_MODE)) {
-		input_unregister_handler(sde_enc->input_handler);
-		sde_enc->input_handler_registered = false;
-	}
+	_sde_encoder_input_handler_unregister(drm_enc);
 
 	/*
 	 * For primary command mode and video mode encoders, execute the
@@ -4580,7 +4533,6 @@ end:
 	mutex_unlock(&sde_enc->rc_lock);
 }
 
-
 void sde_encoder_trigger_kickoff_pending(struct drm_encoder *drm_enc)
 {
 	struct sde_encoder_virt *sde_enc;
@@ -5087,6 +5039,7 @@ static bool is_support_panel(struct drm_connector *connector)
 	}
 }
 
+#ifndef OPLUS_BUG_STABILITY
 bool is_spread_backlight(int level)
 {
 	if((level <= 200)&&(level >= 2))
@@ -5094,6 +5047,22 @@ bool is_spread_backlight(int level)
 	else
 		return false;
 }
+#else
+bool is_spread_backlight(struct dsi_display *display, int level)
+{
+	if ((display == NULL) || (display->panel == NULL))
+		return false;
+
+	if(((level <= display->panel->oplus_priv.sync_brightness_level) && (level >= 2))
+		|| ((display->panel->oplus_priv.dc_apollo_sync_enable)
+			&& (((level <= display->panel->oplus_priv.sync_brightness_level) && (level >= 2))
+			|| (level == display->panel->oplus_priv.dc_apollo_sync_brightness_level)))) {
+		return true;
+	} else {
+		return false;
+	}
+}
+#endif
 
 int oplus_backlight_wait_vsync(struct drm_encoder *drm_enc)
 {
@@ -5162,6 +5131,19 @@ int oplus_sync_panel_brightness(enum oplus_sync_method method, void *phys_enc)
 		SDE_ATRACE_END("sync_panel_brightness");
 	return rc;
 }
+
+int dc_apollo_sync_hbmon(struct dsi_display *display)
+{
+	if (display == NULL || display->panel == NULL)
+		return false;
+
+	if (display->panel->oplus_priv.dc_apollo_sync_enable && display->panel->is_hbm_enabled)
+		return true;
+	else
+		return false;
+}
+
+extern int oplus_dimlayer_hbm;
 #endif
 
 int sde_encoder_prepare_for_kickoff(struct drm_encoder *drm_enc,
@@ -5175,8 +5157,10 @@ int sde_encoder_prepare_for_kickoff(struct drm_encoder *drm_enc,
 	bool needs_hw_reset = false, is_cmd_mode;
 	int i, rc, ret = 0;
 	struct msm_display_info *disp_info;
+#ifdef OPLUS_BUG_STABILITY
 	struct dsi_display *display = NULL;
 	struct sde_connector *c_conn = NULL;
+#endif
 
 	if (!drm_enc || !params || !drm_enc->dev ||
 		!drm_enc->dev->dev_private) {
@@ -5223,7 +5207,8 @@ int sde_encoder_prepare_for_kickoff(struct drm_encoder *drm_enc,
 #ifdef OPLUS_BUG_STABILITY
 	if ((is_support_panel(sde_enc->cur_master->connector) == true)) {
 		if (sde_enc->num_phys_encs > 0) {
-			if ((get_current_display_framerate(sde_enc->cur_master->connector) >= 75) && is_spread_backlight(g_new_bk_level)) {
+			if ((get_current_display_framerate(sde_enc->cur_master->connector) >= 75) && is_spread_backlight(get_main_display(), g_new_bk_level)
+					&& !dc_apollo_sync_hbmon(get_main_display())) {
 				if (g_new_bk_level != get_current_display_brightness(sde_enc->cur_master->connector)) {
 					oplus_sync_panel_brightness(OPLUS_PREPARE_KICKOFF_METHOD, sde_enc->phys_encs[0]);
 				}
@@ -5399,10 +5384,6 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool is_error)
 	}
 	SDE_ATRACE_BEGIN("encoder_kickoff");
 	sde_enc = to_sde_encoder_virt(drm_enc);
-	if (!sde_enc) {
-		SDE_ERROR("invalid encoder virt\n");
-		return;
-	}
 
 	SDE_DEBUG_ENC(sde_enc, "\n");
 
@@ -5450,7 +5431,7 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool is_error)
 	if (sde_enc && sde_enc->cur_master && sde_enc->cur_master->connector) {
 		if ((is_support_panel(sde_enc->cur_master->connector) == true)) {
 			if (sde_enc->num_phys_encs > 0) {
-				if ((get_current_display_framerate(sde_enc->cur_master->connector) < 75) && is_spread_backlight(g_new_bk_level)) {
+				if ((get_current_display_framerate(sde_enc->cur_master->connector) < 75) && is_spread_backlight(get_main_display(), g_new_bk_level)) {
 					if (g_new_bk_level != get_current_display_brightness(sde_enc->cur_master->connector)) {
 						oplus_sync_panel_brightness(OPLUS_POST_KICKOFF_METHOD, sde_enc->phys_encs[0]);
 					}
@@ -5512,7 +5493,7 @@ void sde_encoder_helper_get_pp_line_count(struct drm_encoder *drm_enc,
 		if (phys && phys->hw_intf && phys->hw_pp
 				&& phys->hw_intf->ops.get_vsync_info) {
 			ret = phys->hw_intf->ops.get_vsync_info(
-						phys->hw_intf, &info[i], true);
+						phys->hw_intf, &info[i]);
 			if (!ret) {
 				info[i].pp_idx = phys->hw_pp->idx - PINGPONG_0;
 				info[i].intf_idx = phys->hw_intf->idx - INTF_0;
