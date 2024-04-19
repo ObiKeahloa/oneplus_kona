@@ -895,6 +895,9 @@ lto-clang-flags	:= -flto=thin
 KBUILD_LDFLAGS	+= --thinlto-cache-dir=.thinlto-cache
 else
 lto-clang-flags	:= -flto
+ifdef CONFIG_LD_IS_LLD
+KBUILD_LDFLAGS += --lto-O3
+endif
 endif
 lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
 
