@@ -3,9 +3,7 @@
 clear
 
 export KBUILD_BUILD_HOST=$(uname -a | awk '{print $2}')
-export C_PATH="$HOME/toolchains/neutron-16"
-export GZIP_DIR="$HOME/toolchains/neutron-gzip"
-export COREUTILS_DIR="$HOME/toolchains/neutron-coreutils"
+export C_PATH="$HOME/toolchains/neutron-clang"
 export PATH="$COREUTILS_DIR/bin:$GZIP_DIR/bin:$C_PATH/bin:$PATH"
 export ARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
