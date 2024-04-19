@@ -19,6 +19,7 @@ make O=out ARCH=arm64 PATH="$COREUTILS_DIR/bin:$GZIP_DIR/bin:$C_PATH/bin:$PATH" 
           STRIP=llvm-strip \
           OBJCOPY=llvm-objcopy \
           OBJDUMP=llvm-objdump \
+          KCFLAGS=-O3 \
           OBJSIZE=llvm-size \
           HOSTCC=clang \
           HOSTCXX=clang++ \
@@ -39,6 +40,7 @@ make O=out -j$(nproc --all) \
           STRIP=llvm-strip \
           OBJCOPY=llvm-objcopy \
           OBJDUMP=llvm-objdump \
+          KCFLAGS=-O3 \
           OBJSIZE=llvm-size \
           HOSTCC=clang \
           HOSTCXX=clang++ \
