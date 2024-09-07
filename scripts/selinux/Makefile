@@ -1,1 +1,1 @@
-subdir-y := mdp genheaders
+subdir-y := mdp
