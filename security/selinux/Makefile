@@ -19,14 +19,10 @@ selinux-$(CONFIG_SECURITY_INFINIBAND) += ibpkey.o
 ccflags-y := -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
 
 $(addprefix $(obj)/,$(selinux-y)): $(obj)/flask.h
-#  $(addprefix $(obj)/,$(genhdrs)) &: $(obj)/genheaders FORCE
 
 quiet_cmd_flask = GEN     $(obj)/flask.h $(obj)/av_permissions.h
       cmd_flask = scripts/selinux/genheaders/genheaders $(obj)/flask.h $(obj)/av_permissions.h
 
 targets += flask.h av_permissions.h
-$(obj)/flask.h: $(obj)/genheaders FORCE
+$(obj)/flask.h: $(src)/include/classmap.h FORCE
 	$(call if_changed,flask)
-
-hostprogs := genheaders
-HOST_EXTRACFLAGS += -I$(srctree)/security/selinux/include

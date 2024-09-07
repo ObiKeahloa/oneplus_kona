@@ -120,7 +120,6 @@ VDSO_LDFLAGS += -nostdlib -shared --hash-style=sysv --build-id
 # $(hostprogs-y) with $(obj)
 munge := ../../../arm/vdso/vdsomunge
 hostprogs-y := $(munge)
-HOSTCFLAGS_$(munge).o = $(shell $(HOSTPKG_CONFIG) --cflags bee-headers 2> /dev/null)
 
 c-obj-vdso := note.o
 c-obj-vdso-gettimeofday := vgettimeofday.o
