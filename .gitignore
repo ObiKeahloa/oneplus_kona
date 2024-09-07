@@ -135,3 +135,11 @@ all.config
 
 # fetched Android config fragments
 kernel/configs/android-*.cfg
+
+# out directory
+out/
+
+# AnyKernel3
+anykernel/Image
+anykernel/dtbo.img
+anykernel/dtb
