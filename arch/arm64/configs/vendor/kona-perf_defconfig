@@ -4699,7 +4699,8 @@ CONFIG_QCOM_LAZY_MAPPING=y
 #
 # Remoteproc drivers
 #
-# CONFIG_REMOTEPROC is not set
+CONFIG_REMOTEPROC=y
+CONFIG_REMOTEPROC_CDEV=y
 
 #
 # Rpmsg drivers

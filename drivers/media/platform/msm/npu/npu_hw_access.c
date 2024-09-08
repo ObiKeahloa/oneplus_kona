@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /* -------------------------------------------------------------------------
@@ -11,6 +11,9 @@
 #include <soc/qcom/subsystem_restart.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
+#include <linux/firmware.h>
+#include <linux/qcom_scm.h>
+#include <linux/soc/qcom/mdt_loader.h>
 
 #include "npu_hw_access.h"
 #include "npu_common.h"
@@ -421,59 +424,31 @@ uint8_t npu_hw_log_enabled(void)
  * Functions - Subsystem/PIL
  * -------------------------------------------------------------------------
  */
-void *subsystem_get_local(char *sub_system)
+int npu_subsystem_get(struct npu_device *npu_dev, const char *fw_name)
 {
-	return subsystem_get(sub_system);
-}
+	struct npu_host_ctx *host_ctx = &npu_dev->host_ctx;
+	int ret = 0;
 
-void subsystem_put_local(void *sub_system_handle)
-{
-	return subsystem_put(sub_system_handle);
-}
-
-/* -------------------------------------------------------------------------
- * Functions - Log
- * -------------------------------------------------------------------------
- */
-void npu_process_log_message(struct npu_device *npu_dev, uint32_t *message,
-	uint32_t size)
-{
-	struct npu_debugfs_ctx *debugfs = &npu_dev->debugfs_ctx;
-
-	/* mutex log lock */
-	mutex_lock(&debugfs->log_lock);
-
-	if ((debugfs->log_num_bytes_buffered + size) >
-		debugfs->log_buf_size) {
-		/* No more space, invalidate it all and start over */
-		debugfs->log_read_index = 0;
-		debugfs->log_write_index = size;
-		debugfs->log_num_bytes_buffered = size;
-		memcpy(debugfs->log_buf, message, size);
-	} else {
-		if ((debugfs->log_write_index + size) >
-			debugfs->log_buf_size) {
-			/* Wrap around case */
-			uint8_t *src_addr = (uint8_t *)message;
-			uint8_t *dst_addr = 0;
-			uint32_t remaining_to_end = debugfs->log_buf_size -
-				debugfs->log_write_index + 1;
-			dst_addr = debugfs->log_buf + debugfs->log_write_index;
-			memcpy(dst_addr, src_addr, remaining_to_end);
-			src_addr = &(src_addr[remaining_to_end]);
-			dst_addr = debugfs->log_buf;
-			memcpy(dst_addr, src_addr, size-remaining_to_end);
-			debugfs->log_write_index = size-remaining_to_end;
-		} else {
-			memcpy((debugfs->log_buf + debugfs->log_write_index),
-				message, size);
-			debugfs->log_write_index += size;
-			if (debugfs->log_write_index == debugfs->log_buf_size)
-				debugfs->log_write_index = 0;
-		}
-		debugfs->log_num_bytes_buffered += size;
+	host_ctx->npu_rproc_handle = rproc_get_by_phandle(npu_dev->rproc_phandle);
+	if (IS_ERR_OR_NULL(host_ctx->npu_rproc_handle)) {
+		ret = PTR_ERR(host_ctx->npu_rproc_handle);
+		NPU_ERR("get npu rproc failed: %d", ret);
+		return ret;
 	}
 
-	/* mutex log unlock */
-	mutex_unlock(&debugfs->log_lock);
+	ret = rproc_boot(host_ctx->npu_rproc_handle);
+	if (ret) {
+		NPU_ERR("boot npu by remoteproc failed: %d", ret);
+		return ret;
+	}
+
+	NPU_DBG("done pas auth\n");
+	return ret;
+}
+
+void npu_subsystem_put(struct npu_device *npu_dev)
+{
+	struct npu_host_ctx *host_ctx = &npu_dev->host_ctx;
+
+	rproc_shutdown(host_ctx->npu_rproc_handle);
 }

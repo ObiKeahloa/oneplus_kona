@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _NPU_COMMON_H
@@ -10,7 +10,6 @@
  * Includes
  * -------------------------------------------------------------------------
  */
-#include <asm/dma-iommu.h>
 #include <linux/cdev.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -22,10 +21,13 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/mailbox/qmp.h>
+#ifdef CONFIG_MSM_BUS_SCALING
 #include <linux/msm-bus.h>
+#endif
 #include <linux/mailbox_controller.h>
 #include <linux/reset.h>
-
+#include <linux/interconnect.h>
+#include <linux/remoteproc.h>
 #include "npu_mgr.h"
 
 /* -------------------------------------------------------------------------
@@ -109,12 +111,6 @@ struct npu_debugfs_ctx {
 	struct dentry *root;
 	uint32_t reg_off;
 	uint32_t reg_cnt;
-	uint8_t *log_buf;
-	struct mutex log_lock;
-	uint32_t log_num_bytes_buffered;
-	uint32_t log_read_index;
-	uint32_t log_write_index;
-	uint32_t log_buf_size;
 };
 
 struct npu_debugfs_reg_ctx {
@@ -228,9 +224,11 @@ struct npu_io_data {
 #define MBYTE (1ULL << 20)
 
 struct npu_bwctrl {
+#ifdef CONFIG_MSM_BUS_SCALING
 	struct msm_bus_vectors vectors[MAX_PATHS * DBL_BUF];
 	struct msm_bus_paths bw_levels[DBL_BUF];
 	struct msm_bus_scale_pdata bw_data;
+#endif
 	uint32_t bus_client;
 	int cur_ab;
 	int cur_ib;
@@ -273,9 +271,14 @@ struct npu_device {
 
 	struct device *cb_device;
 
+	phandle rproc_phandle;
 	struct npu_host_ctx host_ctx;
 	struct npu_smmu_ctx smmu_ctx;
 	struct npu_debugfs_ctx debugfs_ctx;
+
+	struct icc_path *icc_llcc_bw;
+	struct icc_path *icc_llcc_ddr_bw;
+	struct icc_path *icc_dsp_ddr_bw;
 
 	struct npu_mbox *mbox_aop;
 	struct npu_mbox mbox[NPU_MAX_MBOX_NUM];

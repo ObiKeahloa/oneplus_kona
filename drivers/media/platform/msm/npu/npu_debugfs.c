@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /* -------------------------------------------------------------------------
@@ -17,7 +17,6 @@
  * Defines
  * -------------------------------------------------------------------------
  */
-#define NPU_LOG_BUF_SIZE 4096
 
 /* -------------------------------------------------------------------------
  * Function Prototypes
@@ -32,8 +31,6 @@ static ssize_t npu_debug_reg_read(struct file *file,
 static ssize_t npu_debug_off_write(struct file *file,
 		const char __user *user_buf, size_t count, loff_t *ppos);
 static ssize_t npu_debug_off_read(struct file *file,
-		char __user *user_buf, size_t count, loff_t *ppos);
-static ssize_t npu_debug_log_read(struct file *file,
 		char __user *user_buf, size_t count, loff_t *ppos);
 static ssize_t npu_debug_ctrl_write(struct file *file,
 		const char __user *user_buf, size_t count, loff_t *ppos);
@@ -55,13 +52,6 @@ static const struct file_operations npu_off_fops = {
 	.release = npu_debug_release,
 	.read = npu_debug_off_read,
 	.write = npu_debug_off_write,
-};
-
-static const struct file_operations npu_log_fops = {
-	.open = npu_debug_open,
-	.release = npu_debug_release,
-	.read = npu_debug_log_read,
-	.write = NULL,
 };
 
 static const struct file_operations npu_ctrl_fops = {
@@ -249,48 +239,6 @@ static ssize_t npu_debug_off_read(struct file *file,
 }
 
 /* -------------------------------------------------------------------------
- * Function Implementations - DebugFS Log
- * -------------------------------------------------------------------------
- */
-static ssize_t npu_debug_log_read(struct file *file,
-			char __user *user_buf, size_t count, loff_t *ppos)
-{
-	size_t len = 0;
-	struct npu_device *npu_dev = file->private_data;
-	struct npu_debugfs_ctx *debugfs;
-
-	NPU_DBG("npu_dev %pK %pK\n", npu_dev, g_npu_dev);
-	npu_dev = g_npu_dev;
-	debugfs = &npu_dev->debugfs_ctx;
-
-	/* mutex log lock */
-	mutex_lock(&debugfs->log_lock);
-
-	if (debugfs->log_num_bytes_buffered != 0) {
-		len = min(debugfs->log_num_bytes_buffered,
-			debugfs->log_buf_size - debugfs->log_read_index);
-		len = min(count, len);
-		if (copy_to_user(user_buf, (debugfs->log_buf +
-			debugfs->log_read_index), len)) {
-			NPU_ERR("failed to copy to user\n");
-			mutex_unlock(&debugfs->log_lock);
-			return -EFAULT;
-		}
-		debugfs->log_read_index += len;
-		if (debugfs->log_read_index == debugfs->log_buf_size)
-			debugfs->log_read_index = 0;
-
-		debugfs->log_num_bytes_buffered -= len;
-		*ppos += len;
-	}
-
-	/* mutex log unlock */
-	mutex_unlock(&debugfs->log_lock);
-
-	return len;
-}
-
-/* -------------------------------------------------------------------------
  * Function Implementations - DebugFS Control
  * -------------------------------------------------------------------------
  */
@@ -373,62 +321,29 @@ int npu_debugfs_init(struct npu_device *npu_dev)
 		goto err;
 	}
 
-	if (!debugfs_create_file("log", 0644, debugfs->root,
-		npu_dev, &npu_log_fops)) {
-		NPU_ERR("debugfs_create_file log fail\n");
-		goto err;
-	}
-
 	if (!debugfs_create_file("ctrl", 0644, debugfs->root,
 		npu_dev, &npu_ctrl_fops)) {
 		NPU_ERR("debugfs_create_file ctrl fail\n");
 		goto err;
 	}
 
-	if (!debugfs_create_bool("sys_cache_disable", 0644,
-		debugfs->root, &(host_ctx->sys_cache_disable))) {
-		NPU_ERR("debugfs_creat_bool fail for sys cache\n");
-		goto err;
-	}
+	debugfs_create_bool("sys_cache_disable", 0644,
+		debugfs->root, &(host_ctx->sys_cache_disable));
 
-	if (!debugfs_create_bool("auto_pil_disable", 0644,
-		debugfs->root, &(host_ctx->auto_pil_disable))) {
-		NPU_ERR("debugfs_creat_bool fail for auto pil\n");
-		goto err;
-	}
+	debugfs_create_bool("auto_pil_disable", 0644,
+		debugfs->root, &(host_ctx->auto_pil_disable));
 
-	if (!debugfs_create_u32("fw_dbg_mode", 0644,
-		debugfs->root, &(host_ctx->fw_dbg_mode))) {
-		NPU_ERR("debugfs_create_u32 fail for fw_dbg_mode\n");
-		goto err;
-	}
+	debugfs_create_u32("fw_dbg_mode", 0644,
+		debugfs->root, &(host_ctx->fw_dbg_mode));
 
-	if (!debugfs_create_u32("fw_state", 0444,
-		debugfs->root, &(host_ctx->fw_state))) {
-		NPU_ERR("debugfs_create_u32 fail for fw_state\n");
-		goto err;
-	}
+	debugfs_create_u32("fw_state", 0444,
+		debugfs->root, &(host_ctx->fw_state));
 
-	if (!debugfs_create_u32("pwr_level", 0444,
-		debugfs->root, &(pwr->active_pwrlevel))) {
-		NPU_ERR("debugfs_create_u32 fail for pwr_level\n");
-		goto err;
-	}
+	debugfs_create_u32("pwr_level", 0444,
+		debugfs->root, &(pwr->active_pwrlevel));
 
-	if (!debugfs_create_u32("exec_flags", 0644,
-		debugfs->root, &(host_ctx->exec_flags_override))) {
-		NPU_ERR("debugfs_create_u32 fail for exec_flags\n");
-		goto err;
-	}
-
-	debugfs->log_num_bytes_buffered = 0;
-	debugfs->log_read_index = 0;
-	debugfs->log_write_index = 0;
-	debugfs->log_buf_size = NPU_LOG_BUF_SIZE;
-	debugfs->log_buf = kzalloc(debugfs->log_buf_size, GFP_KERNEL);
-	if (!debugfs->log_buf)
-		goto err;
-	mutex_init(&debugfs->log_lock);
+	debugfs_create_u32("exec_flags", 0644,
+		debugfs->root, &(host_ctx->exec_flags_override));
 
 	return 0;
 
@@ -440,12 +355,6 @@ err:
 void npu_debugfs_deinit(struct npu_device *npu_dev)
 {
 	struct npu_debugfs_ctx *debugfs = &npu_dev->debugfs_ctx;
-
-	debugfs->log_num_bytes_buffered = 0;
-	debugfs->log_read_index = 0;
-	debugfs->log_write_index = 0;
-	debugfs->log_buf_size = 0;
-	kfree(debugfs->log_buf);
 
 	if (!IS_ERR_OR_NULL(debugfs->root)) {
 		debugfs_remove_recursive(debugfs->root);

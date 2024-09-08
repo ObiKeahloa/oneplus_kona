@@ -1,25 +1,26 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /* -------------------------------------------------------------------------
  * Includes
  * -------------------------------------------------------------------------
  */
-#include <dt-bindings/msm/msm-bus-ids.h>
 #include <linux/clk.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/io.h>
 #include <linux/of_platform.h>
+#include <linux/of_address.h>
 #include <linux/poll.h>
 #include <linux/regulator/consumer.h>
 #include <linux/thermal.h>
 #include <linux/soc/qcom/llcc-qcom.h>
 #include <linux/soc/qcom/cdsprm_cxlimit.h>
-#include <soc/qcom/devfreq_devbw.h>
-
+#include <linux/devfreq.h>
+#include <linux/qcom_scm.h>
+#include <linux/remoteproc.h>
 #include "npu_common.h"
 #include "npu_hw.h"
 
@@ -100,6 +101,7 @@ static long npu_ioctl(struct file *file, unsigned int cmd,
 static int npu_parse_dt_clock(struct npu_device *npu_dev);
 static int npu_parse_dt_regulator(struct npu_device *npu_dev);
 static int npu_parse_dt_bw(struct npu_device *npu_dev);
+static int npu_parse_dt_rproc(struct npu_device *npu_dev);
 static int npu_of_parse_pwrlevels(struct npu_device *npu_dev,
 		struct device_node *node);
 static int npu_pwrctrl_init(struct npu_device *npu_dev);
@@ -816,7 +818,9 @@ static void npu_suspend_devbw(struct npu_device *npu_dev)
 
 	if (pwr->bwmon_enabled && (pwr->devbw_num > 0)) {
 		for (i = 0; i < pwr->devbw_num; i++) {
-			ret = devfreq_suspend_devbw(pwr->devbw[i]);
+			//TODO
+			//ret = devfreq_suspend_icc(pwr->devbw[i]);
+			ret = 0;
 			if (ret)
 				NPU_ERR("devfreq_suspend_devbw failed rc:%d\n",
 					ret);
@@ -832,7 +836,9 @@ static void npu_resume_devbw(struct npu_device *npu_dev)
 
 	if (!pwr->bwmon_enabled && (pwr->devbw_num > 0)) {
 		for (i = 0; i < pwr->devbw_num; i++) {
-			ret = devfreq_resume_devbw(pwr->devbw[i]);
+			//TODO
+			//ret = devfreq_resume_icc(pwr->devbw[i]);
+			ret = 0;
 			if (ret)
 				NPU_ERR("devfreq_resume_devbw failed rc:%d\n",
 					ret);
@@ -920,10 +926,13 @@ static int npu_enable_clocks(struct npu_device *npu_dev, bool post_pil)
 			if (rc)
 				NPU_WARN("deassert %s reset failed\n",
 					core_clks[i].clk_name);
-		}
+					}
 
 		rc = clk_prepare_enable(core_clks[i].clk);
-		if (rc) {
+		if (!rc) {
+			NPU_DBG("%s enable success\n",
+				core_clks[i].clk_name);
+		} else {
 			NPU_ERR("%s enable failed\n",
 				core_clks[i].clk_name);
 			break;
@@ -934,12 +943,17 @@ static int npu_enable_clocks(struct npu_device *npu_dev, bool post_pil)
 
 		rc = clk_set_rate(core_clks[i].clk,
 			pwrlevel->clk_freq[i]);
+
 		/* not fatal error, keep using previous clk rate */
 		if (rc) {
 			NPU_ERR("clk_set_rate %s to %ld failed\n",
 				core_clks[i].clk_name,
 				pwrlevel->clk_freq[i]);
 			rc = 0;
+		} else {
+			NPU_DBG("clk_set_rate %s to %ld success\n",
+				core_clks[i].clk_name,
+				pwrlevel->clk_freq[i]);
 		}
 	}
 
@@ -1715,7 +1729,7 @@ static int npu_parse_dt_clock(struct npu_device *npu_dev)
 	for (i = 0; i < num_clk; i++) {
 		of_property_read_string_index(pdev->dev.of_node, "clock-names",
 							i, &clock_name);
-		strlcpy(core_clks[i].clk_name, clock_name,
+		strscpy(core_clks[i].clk_name, clock_name,
 			sizeof(core_clks[i].clk_name));
 		core_clks[i].clk = devm_clk_get(&pdev->dev, clock_name);
 		if (IS_ERR(core_clks[i].clk)) {
@@ -1766,7 +1780,7 @@ static int npu_parse_dt_regulator(struct npu_device *npu_dev)
 	for (i = 0; i < num; i++) {
 		of_property_read_string_index(pdev->dev.of_node,
 			"qcom,proxy-reg-names", i, &name);
-		strlcpy(regulators[i].regulator_name, name,
+		strscpy(regulators[i].regulator_name, name,
 				sizeof(regulators[i].regulator_name));
 		regulators[i].regulator = devm_regulator_get(&pdev->dev, name);
 		if (IS_ERR(regulators[i].regulator)) {
@@ -1782,95 +1796,53 @@ regulator_err:
 
 static int npu_parse_dt_bw(struct npu_device *npu_dev)
 {
-	int ret, len, num_paths, i;
-	uint32_t ports[MAX_PATHS * 2];
 	struct platform_device *pdev = npu_dev->pdev;
-	struct npu_bwctrl *bwctrl = &npu_dev->bwctrl;
 
-	if (of_find_property(pdev->dev.of_node, "qcom,src-dst-ports", &len)) {
-		len /= sizeof(ports[0]);
-		if (len % 2 || len > ARRAY_SIZE(ports)) {
-			NPU_ERR("Unexpected number of ports %d\n", len);
-			return -EINVAL;
-		}
-
-		ret = of_property_read_u32_array(pdev->dev.of_node,
-			"qcom,src-dst-ports", ports, len);
-		if (ret) {
-			NPU_ERR("Failed to read bw property\n");
-			return ret;
-		}
-		num_paths = len / 2;
-	} else {
-		NPU_ERR("can't find bw property\n");
+	npu_dev->icc_llcc_bw = of_icc_get(&pdev->dev, "icc_llcc_bw");
+	if (IS_ERR_OR_NULL(npu_dev->icc_llcc_bw)) {
+		NPU_ERR("Failed getting icc_llcc_bw from dts\n");
+		npu_dev->icc_llcc_bw = NULL;
 		return -EINVAL;
 	}
 
-	bwctrl->bw_levels[0].vectors = &bwctrl->vectors[0];
-	bwctrl->bw_levels[1].vectors = &bwctrl->vectors[MAX_PATHS];
-	bwctrl->bw_data.usecase = bwctrl->bw_levels;
-	bwctrl->bw_data.num_usecases = ARRAY_SIZE(bwctrl->bw_levels);
-	bwctrl->bw_data.name = dev_name(&pdev->dev);
-	bwctrl->bw_data.active_only = false;
-
-	for (i = 0; i < num_paths; i++) {
-		bwctrl->bw_levels[0].vectors[i].src = ports[2 * i];
-		bwctrl->bw_levels[0].vectors[i].dst = ports[2 * i + 1];
-		bwctrl->bw_levels[1].vectors[i].src = ports[2 * i];
-		bwctrl->bw_levels[1].vectors[i].dst = ports[2 * i + 1];
-	}
-	bwctrl->bw_levels[0].num_paths = num_paths;
-	bwctrl->bw_levels[1].num_paths = num_paths;
-	bwctrl->num_paths = num_paths;
-
-	bwctrl->bus_client = msm_bus_scale_register_client(&bwctrl->bw_data);
-	if (!bwctrl->bus_client) {
-		NPU_ERR("Unable to register bus client\n");
-		return -ENODEV;
+	npu_dev->icc_llcc_ddr_bw = of_icc_get(&pdev->dev, "icc_llcc_ddr_bw");
+	if (IS_ERR_OR_NULL(npu_dev->icc_llcc_ddr_bw)) {
+		NPU_ERR("Failed getting icc_llcc_ddr_bw from dts\n");
+		npu_dev->icc_llcc_ddr_bw = NULL;
+		return -EINVAL;
 	}
 
-	NPU_INFO("NPU BW client sets up successfully\n");
-
+	npu_dev->icc_dsp_ddr_bw = of_icc_get(&pdev->dev, "icc_dsp_ddr_bw");
+	if (IS_ERR_OR_NULL(npu_dev->icc_dsp_ddr_bw)) {
+		NPU_ERR("Failed getting icc_dsp_ddr_bw from dts\n");
+		npu_dev->icc_dsp_ddr_bw = NULL;
+		return -EINVAL;
+	}
 	return 0;
 }
 
 int npu_set_bw(struct npu_device *npu_dev, int new_ib, int new_ab)
 {
-	int i, j, ret;
-	struct npu_bwctrl *bwctrl = &npu_dev->bwctrl;
+	int ret = 0;
 
-	if (!bwctrl->bus_client) {
-		NPU_DBG("bus client doesn't exist\n");
-		return 0;
-	}
-
-	if (bwctrl->cur_ib == new_ib && bwctrl->cur_ab == new_ab)
-		return 0;
-
-	i = (bwctrl->cur_idx + 1) % DBL_BUF;
-
-	for (j = 0; j < bwctrl->num_paths; j++) {
-		if ((bwctrl->bw_levels[i].vectors[j].dst ==
-			MSM_BUS_SLAVE_CLK_CTL) && (new_ib > 0)) {
-			bwctrl->bw_levels[i].vectors[j].ib = 1;
-			bwctrl->bw_levels[i].vectors[j].ab = 1;
-		} else {
-			bwctrl->bw_levels[i].vectors[j].ib = new_ib * MBYTE;
-			bwctrl->bw_levels[i].vectors[j].ab =
-				new_ab * MBYTE / bwctrl->num_paths;
-		}
-	}
-
-	ret = msm_bus_scale_client_update_request(bwctrl->bus_client, i);
+	ret = icc_set_bw(npu_dev->icc_llcc_bw, new_ib, new_ab);
 	if (ret) {
-		NPU_ERR("bandwidth request failed (%d)\n", ret);
-	} else {
-		bwctrl->cur_idx = i;
-		bwctrl->cur_ib = new_ib;
-		bwctrl->cur_ab = new_ab;
+		NPU_ERR("set interconnects icc_llcc_bw failed, ret:%d\n", ret);
+		return ret;
 	}
 
-	return ret;
+	ret = icc_set_bw(npu_dev->icc_llcc_ddr_bw, new_ib, new_ab);
+	if (ret) {
+		NPU_ERR("set interconnects icc_llcc_ddr_bw failed, ret:%d\n", ret);
+		return ret;
+	}
+
+	ret = icc_set_bw(npu_dev->icc_dsp_ddr_bw, new_ib, new_ab);
+	if (ret) {
+		NPU_ERR("icc_set_bw icc_npu_llcc_ddr_bw failed, ret:%d\n", ret);
+		return ret;
+	}
+	return 0;
 }
 
 #define NPU_FMAX_THRESHOLD 1000000
@@ -2395,6 +2367,11 @@ static int npu_probe(struct platform_device *pdev)
 	struct npu_device *npu_dev = 0;
 	struct thermal_cooling_device *tcdev = 0;
 
+	if (!qcom_scm_is_available()) {
+		pr_err("qcom scm is not available, npu probe defer\n");
+		return -EPROBE_DEFER;
+	}
+
 	npu_dev = devm_kzalloc(&pdev->dev,
 		sizeof(struct npu_device), GFP_KERNEL);
 	if (!npu_dev)
@@ -2402,7 +2379,6 @@ static int npu_probe(struct platform_device *pdev)
 
 	npu_dev->pdev = pdev;
 	mutex_init(&npu_dev->dev_lock);
-
 	dev_set_drvdata(&pdev->dev, npu_dev);
 	res = platform_get_resource_byname(pdev,
 		IORESOURCE_MEM, "core");
@@ -2517,6 +2493,12 @@ static int npu_probe(struct platform_device *pdev)
 			res->start, npu_dev->qfprom_io.base);
 	}
 
+	rc = npu_parse_dt_rproc(npu_dev);
+	if (rc) {
+		NPU_ERR("failed parse dt rproc\n");
+		goto error_get_dev_num;
+	}
+
 	rc = npu_parse_dt_regulator(npu_dev);
 	if (rc)
 		goto error_get_dev_num;
@@ -2606,7 +2588,6 @@ static int npu_probe(struct platform_device *pdev)
 			goto error_driver_init;
 		}
 		npu_dev->tcdev = tcdev;
-		thermal_cdev_update(tcdev);
 	}
 
 	rc = npu_cdsprm_cxlimit_init(npu_dev);
@@ -2614,6 +2595,8 @@ static int npu_probe(struct platform_device *pdev)
 		goto error_driver_init;
 
 	g_npu_dev = npu_dev;
+
+	NPU_DBG("%s success, rc:%d", __func__, rc);
 
 	return rc;
 error_driver_init:
@@ -2635,6 +2618,20 @@ error_get_dev_num:
 	return rc;
 }
 
+static int npu_parse_dt_rproc(struct npu_device *npu_dev)
+{
+	struct platform_device *pdev = npu_dev->pdev;
+	int rc = 0;
+
+	rc = of_property_read_u32(pdev->dev.of_node, "qcom,rproc-handle",
+				&npu_dev->rproc_phandle);
+	if (rc) {
+		NPU_ERR("get rproc-handle from dt failed, %d", rc);
+		return rc;
+	}
+	return 0;
+}
+
 static int npu_remove(struct platform_device *pdev)
 {
 	struct npu_device *npu_dev;
@@ -2652,8 +2649,6 @@ static int npu_remove(struct platform_device *pdev)
 	unregister_chrdev_region(npu_dev->dev_num, 1);
 	dev_set_drvdata(&pdev->dev, NULL);
 	npu_mbox_deinit(npu_dev);
-	msm_bus_scale_unregister_client(npu_dev->bwctrl.bus_client);
-
 	g_npu_dev = NULL;
 
 	return 0;

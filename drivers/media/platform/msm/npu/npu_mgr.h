@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _NPU_MGR_H
@@ -99,7 +99,7 @@ enum fw_state {
 struct npu_host_ctx {
 	struct mutex lock;
 	struct npu_device *npu_dev;
-	void *subsystem_handle;
+	struct rproc *npu_rproc_handle;
 	enum fw_state fw_state;
 	int32_t fw_ref_cnt;
 	int32_t npu_init_cnt;
