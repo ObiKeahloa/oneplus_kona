@@ -544,11 +544,6 @@ int adsp_subsystem_restart(const char *name)
 	if (!name)
 		return -ENODEV;
 
-	if (oplus_get_ssr_state()) {
-		pr_err("%s(): adsp alreay in restart, ignore\n", __func__);
-		return ret;
-	}
-
 	while (retry < ADSP_READY_RETRY_NUM) {
 		retry++;
 		if (!q6core_is_adsp_ready()) {
@@ -562,8 +557,7 @@ int adsp_subsystem_restart(const char *name)
 
 	pr_err("%s(): adsp retry:%d\n", __func__, retry);
 	if ((retry == ADSP_READY_RETRY_NUM)
-			&& (apr_get_q6_state() != APR_SUBSYS_DOWN)
-			&& !oplus_get_ssr_state()) {
+			&& (apr_get_q6_state() != APR_SUBSYS_DOWN)) {
 		if (!is_fulldump_on_func) {
 			is_fulldump_on_func = symbol_request(oem_is_fulldump);
 		}
