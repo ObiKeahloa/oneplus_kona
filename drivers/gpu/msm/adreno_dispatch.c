@@ -283,17 +283,8 @@ static void _retire_timestamp(struct kgsl_drawobj *drawobj)
 	/* Retire pending GPU events for the object */
 	kgsl_process_event_group(device, &context->events);
 
-	/*
-	 * For A3xx we still get the rptr from the CP_RB_RPTR instead of
-	 * rptr scratch out address. At this point GPU clocks turned off.
-	 * So avoid reading GPU register directly for A3xx.
-	 */
-	if (adreno_is_a3xx(ADRENO_DEVICE(device)))
-		trace_adreno_cmdbatch_retired(drawobj, -1, 0, 0, drawctxt->rb,
-				0, 0);
-	else
-		trace_adreno_cmdbatch_retired(drawobj, -1, 0, 0, drawctxt->rb,
-			adreno_get_rptr(drawctxt->rb), 0);
+	trace_adreno_cmdbatch_retired(drawobj, -1, 0, 0, drawctxt->rb,
+		adreno_get_rptr(drawctxt->rb), 0);
 	kgsl_drawobj_destroy(drawobj);
 }
 
@@ -1166,13 +1157,7 @@ static inline int _verify_cmdobj(struct kgsl_device_private *dev_priv,
 					&ADRENO_CONTEXT(context)->base, ib))
 					return -EINVAL;
 		}
-
-		/* A3XX does not have support for drawobj profiling */
-		if (adreno_is_a3xx(ADRENO_DEVICE(device)) &&
-			(drawobj[i]->flags & KGSL_DRAWOBJ_PROFILING))
-			return -EOPNOTSUPP;
 	}
-
 	return 0;
 }
 
@@ -2169,7 +2154,7 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	}
 
 	if (!(fault & ADRENO_IOMMU_PAGE_FAULT) &&
-		(adreno_is_a5xx(adreno_dev) || adreno_is_a6xx(adreno_dev)) &&
+		(adreno_is_a6xx(adreno_dev)) &&
 		smmu_stalled) {
 		mutex_unlock(&device->mutex);
 		dev_err(device->dev, "SMMU is stalled without a pagefault\n");
@@ -2196,7 +2181,7 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	 */
 	if (!(fault & ADRENO_HARD_FAULT) && gx_on) {
 		adreno_readreg(adreno_dev, ADRENO_REG_CP_ME_CNTL, &reg);
-		if (adreno_is_a5xx(adreno_dev) || adreno_is_a6xx(adreno_dev))
+		if (adreno_is_a6xx(adreno_dev))
 			reg |= 1 | (1 << 1);
 		else
 			reg |= (1 << 27) | (1 << 28);
@@ -2371,20 +2356,10 @@ static void retire_cmdobj(struct adreno_device *adreno_dev,
 	if (test_bit(CMDOBJ_PROFILE, &cmdobj->priv))
 		cmdobj_profile_ticks(adreno_dev, cmdobj, &start, &end);
 
-	/*
-	 * For A3xx we still get the rptr from the CP_RB_RPTR instead of
-	 * rptr scratch out address. At this point GPU clocks turned off.
-	 * So avoid reading GPU register directly for A3xx.
-	 */
-	if (adreno_is_a3xx(adreno_dev))
-		trace_adreno_cmdbatch_retired(drawobj,
-			(int) dispatcher->inflight, start, end,
-			ADRENO_DRAWOBJ_RB(drawobj), 0, cmdobj->fault_recovery);
-	else
-		trace_adreno_cmdbatch_retired(drawobj,
-			(int) dispatcher->inflight, start, end,
-			ADRENO_DRAWOBJ_RB(drawobj),
-			adreno_get_rptr(drawctxt->rb), cmdobj->fault_recovery);
+	trace_adreno_cmdbatch_retired(drawobj,
+		(int) dispatcher->inflight, start, end,
+		ADRENO_DRAWOBJ_RB(drawobj),
+		adreno_get_rptr(drawctxt->rb), cmdobj->fault_recovery);
 
 	kgsl_drawobj_destroy(drawobj);
 }

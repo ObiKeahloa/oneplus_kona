@@ -495,10 +495,6 @@ static const struct adreno_debugbus_block a6xx_vbif_debugbus_blocks = {
 	A6XX_DBGBUS_VBIF, 0x100,
 };
 
-static const struct adreno_debugbus_block a6xx_cx_dbgc_debugbus_blocks[] = {
-	{ A6XX_DBGBUS_GMU_CX, 0x100, },
-	{ A6XX_DBGBUS_CX, 0x100, },
-};
 
 static const struct adreno_debugbus_block a650_dbgc_debugbus_blocks[] = {
 	{ A6XX_DBGBUS_RB_2, 0x100, },
@@ -1421,66 +1417,6 @@ static size_t a6xx_snapshot_vbif_debugbus_block(struct kgsl_device *device,
 	return size;
 }
 
-/* a6xx_cx_dbgc_debug_bus_read() - Read data from trace bus */
-static void a6xx_cx_debug_bus_read(struct kgsl_device *device,
-	unsigned int block_id, unsigned int index, unsigned int *val)
-{
-	unsigned int reg;
-
-	reg = (block_id << A6XX_CX_DBGC_CFG_DBGBUS_SEL_PING_BLK_SEL_SHIFT) |
-			(index << A6XX_CX_DBGC_CFG_DBGBUS_SEL_PING_INDEX_SHIFT);
-
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_SEL_A, reg);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_SEL_B, reg);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_SEL_C, reg);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_SEL_D, reg);
-
-	/*
-	 * There needs to be a delay of 1 us to ensure enough time for correct
-	 * data is funneled into the trace buffer
-	 */
-	udelay(1);
-
-	adreno_cx_dbgc_regread(device, A6XX_CX_DBGC_CFG_DBGBUS_TRACE_BUF2, val);
-	val++;
-	adreno_cx_dbgc_regread(device, A6XX_CX_DBGC_CFG_DBGBUS_TRACE_BUF1, val);
-}
-
-/*
- * a6xx_snapshot_cx_dbgc_debugbus_block() - Capture debug data for a gpu
- * block from the CX DBGC block
- */
-static size_t a6xx_snapshot_cx_dbgc_debugbus_block(struct kgsl_device *device,
-	u8 *buf, size_t remain, void *priv)
-{
-	struct kgsl_snapshot_debugbus *header =
-		(struct kgsl_snapshot_debugbus *)buf;
-	struct adreno_debugbus_block *block = priv;
-	int i;
-	unsigned int *data = (unsigned int *)(buf + sizeof(*header));
-	unsigned int dwords;
-	size_t size;
-
-	dwords = block->dwords;
-
-	/* For a6xx each debug bus data unit is 2 DWRODS */
-	size = (dwords * sizeof(unsigned int) * 2) + sizeof(*header);
-
-	if (remain < size) {
-		SNAPSHOT_ERR_NOMEM(device, "DEBUGBUS");
-		return 0;
-	}
-
-	header->id = block->block_id;
-	header->count = dwords * 2;
-
-	for (i = 0; i < dwords; i++)
-		a6xx_cx_debug_bus_read(device, block->block_id, i,
-					&data[i*2]);
-
-	return size;
-}
-
 /* a6xx_snapshot_debugbus() - Capture debug bus data */
 static void a6xx_snapshot_debugbus(struct adreno_device *adreno_dev,
 		struct kgsl_snapshot *snapshot)
@@ -1525,43 +1461,6 @@ static void a6xx_snapshot_debugbus(struct adreno_device *adreno_dev,
 	kgsl_regwrite(device, A6XX_DBGC_CFG_DBGBUS_MASKL_2, 0);
 	kgsl_regwrite(device, A6XX_DBGC_CFG_DBGBUS_MASKL_3, 0);
 
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_CNTLT,
-		(0xf << A6XX_DBGC_CFG_DBGBUS_CNTLT_SEGT_SHIFT) |
-		(0x0 << A6XX_DBGC_CFG_DBGBUS_CNTLT_GRANU_SHIFT) |
-		(0x0 << A6XX_DBGC_CFG_DBGBUS_CNTLT_TRACEEN_SHIFT));
-
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_CNTLM,
-		0xf << A6XX_CX_DBGC_CFG_DBGBUS_CNTLM_ENABLE_SHIFT);
-
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_IVTL_0, 0);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_IVTL_1, 0);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_IVTL_2, 0);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_IVTL_3, 0);
-
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_BYTEL_0,
-		(0 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL0_SHIFT) |
-		(1 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL1_SHIFT) |
-		(2 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL2_SHIFT) |
-		(3 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL3_SHIFT) |
-		(4 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL4_SHIFT) |
-		(5 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL5_SHIFT) |
-		(6 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL6_SHIFT) |
-		(7 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL7_SHIFT));
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_BYTEL_1,
-		(8 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL8_SHIFT) |
-		(9 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL9_SHIFT) |
-		(10 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL10_SHIFT) |
-		(11 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL11_SHIFT) |
-		(12 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL12_SHIFT) |
-		(13 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL13_SHIFT) |
-		(14 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL14_SHIFT) |
-		(15 << A6XX_CX_DBGC_CFG_DBGBUS_BYTEL15_SHIFT));
-
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_MASKL_0, 0);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_MASKL_1, 0);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_MASKL_2, 0);
-	adreno_cx_dbgc_regwrite(device, A6XX_CX_DBGC_CFG_DBGBUS_MASKL_3, 0);
-
 	for (i = 0; i < ARRAY_SIZE(a6xx_dbgc_debugbus_blocks); i++) {
 		kgsl_snapshot_add_section(device,
 			KGSL_SNAPSHOT_SECTION_DEBUGBUS,
@@ -1603,26 +1502,6 @@ static void a6xx_snapshot_debugbus(struct adreno_device *adreno_dev,
 			snapshot, a6xx_snapshot_vbif_debugbus_block,
 			(void *) &a6xx_vbif_debugbus_blocks);
 
-	/* Dump the CX debugbus data if the block exists */
-	if (adreno_is_cx_dbgc_register(device, A6XX_CX_DBGC_CFG_DBGBUS_SEL_A)) {
-		for (i = 0; i < ARRAY_SIZE(a6xx_cx_dbgc_debugbus_blocks); i++) {
-			kgsl_snapshot_add_section(device,
-				KGSL_SNAPSHOT_SECTION_DEBUGBUS,
-				snapshot, a6xx_snapshot_cx_dbgc_debugbus_block,
-				(void *) &a6xx_cx_dbgc_debugbus_blocks[i]);
-		}
-		/*
-		 * Get debugbus for GBIF CX part if GPU has GBIF block
-		 * GBIF uses exactly same ID as of VBIF so use
-		 * it as it is.
-		 */
-		if (adreno_has_gbif(adreno_dev))
-			kgsl_snapshot_add_section(device,
-				KGSL_SNAPSHOT_SECTION_DEBUGBUS,
-				snapshot,
-				a6xx_snapshot_cx_dbgc_debugbus_block,
-				(void *) &a6xx_vbif_debugbus_blocks);
-	}
 }
 
 
